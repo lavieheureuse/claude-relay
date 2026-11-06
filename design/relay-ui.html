@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>接力 Relay 界面</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --canvas:#ECEAE4; --win:#FBFAF7; --card:#FFFFFF; --line:#E7E4DC; --line-2:#D9D5CB;
+  --ink:#1D1C1A; --ink-2:#6B675F; --ink-3:#A29D93;
+  --clay:#D9734E; --clay-soft:#FBEDE6; --clay-ink:#9A4424;
+  --sage:#3F8F6B; --sage-soft:#E7F3EC;
+  --amber-soft:#FBF1DC; --amber-ink:#8A5A0B;
+  --violet-soft:#EEEAFB; --violet-ink:#4B3C99;
+  --sky-soft:#E6F0FA; --sky-ink:#1F5689;
+  --shadow:0 1px 2px rgba(30,25,15,.04),0 8px 24px rgba(30,25,15,.06);
+  --shadow-win:0 2px 4px rgba(30,25,15,.05),0 24px 60px rgba(30,25,15,.14);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--canvas);font-family:Inter,"Noto Sans SC","Microsoft YaHei UI",system-ui,sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased;padding:48px 16px}
+.stage{display:flex;gap:40px;justify-content:center;align-items:flex-start;flex-wrap:wrap}
+.label{font-size:12px;color:var(--ink-2);letter-spacing:.04em;margin:0 0 12px 4px}
+.win{width:400px;background:var(--win);border-radius:14px;box-shadow:var(--shadow-win);overflow:hidden;border:1px solid rgba(0,0,0,.04)}
+.bar{display:flex;align-items:center;gap:10px;height:48px;padding:0 8px 0 18px}
+.logo{width:22px;height:22px;border-radius:7px;background:var(--clay);position:relative;flex:none}
+.logo:before,.logo:after{content:"";position:absolute;width:12px;height:3px;border-radius:2px;background:#fff;left:5px}
+.logo:before{top:7px}.logo:after{top:12px;left:6px;width:10px;opacity:.7}
+.brand{font-weight:600;font-size:14px;letter-spacing:.02em}
+.brand small{font-weight:500;color:var(--ink-3);font-size:12px;margin-left:4px}
+.grow{flex:1}
+.wbtn{width:34px;height:30px;border-radius:7px;display:grid;place-items:center;color:var(--ink-2)}
+.wbtn svg{width:12px;height:12px}
+.body{padding:4px 18px 18px}
+
+.hero{background:var(--card);border-radius:12px;box-shadow:var(--shadow);padding:16px;border:1px solid var(--line)}
+.who{display:flex;align-items:center;gap:12px}
+.av{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-weight:600;font-size:15px;flex:none}
+.av.clay{background:var(--clay-soft);color:var(--clay-ink)}
+.av.sky{background:var(--sky-soft);color:var(--sky-ink)}
+.av.ghost{background:transparent;border:1.5px dashed var(--line-2);color:var(--ink-3)}
+.name{font-weight:600;font-size:15px;display:flex;align-items:center;gap:6px}
+.mail{font-size:12px;color:var(--ink-2);margin-top:2px}
+.pill{font-size:11px;font-weight:500;padding:2px 7px;border-radius:999px;line-height:16px}
+.pill.pro{background:var(--violet-soft);color:var(--violet-ink)}
+.pill.free{background:#F1EFEA;color:var(--ink-2)}
+.live{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sage)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 3px var(--sage-soft)}
+.meters{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.meter{background:#F7F6F2;border-radius:10px;padding:10px 12px}
+.meter .k{font-size:11px;color:var(--ink-2);display:flex;justify-content:space-between}
+.meter .v{font-size:18px;font-weight:600;margin:2px 0 6px;font-variant-numeric:tabular-nums}
+.track{height:4px;border-radius:2px;background:#E9E6DF;overflow:hidden}
+.track i{display:block;height:100%;border-radius:2px;background:var(--clay)}
+.shared{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--ink-2)}
+.shared svg{width:14px;height:14px;color:var(--sage)}
+.shared b{font-weight:500;color:var(--ink)}
+
+.sec{display:flex;align-items:center;justify-content:space-between;margin:18px 2px 8px}
+.sec h3{font-size:12px;font-weight:500;color:var(--ink-2);letter-spacing:.04em}
+.sec a{font-size:12px;color:var(--ink-2);text-decoration:none}
+.list{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.row{display:flex;align-items:center;gap:12px;padding:12px 14px}
+.row+.row{border-top:1px solid var(--line)}
+.row .meta{flex:1;min-width:0}
+.row .sub{font-size:12px;color:var(--ink-2);margin-top:2px;display:flex;gap:8px;align-items:center}
+.warn{display:flex;gap:6px;align-items:flex-start;margin:0 14px 12px 66px;padding:8px 10px;border-radius:8px;background:var(--amber-soft);color:var(--amber-ink);font-size:12px;line-height:1.5}
+.btn{font:inherit;font-size:13px;font-weight:500;height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--line-2);background:var(--card);color:var(--ink);cursor:pointer}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2)}
+.add{display:flex;align-items:center;gap:12px;padding:12px 14px;border-top:1px solid var(--line);color:var(--ink-2);font-size:13px}
+.foot{display:flex;align-items:center;gap:4px;margin-top:14px;font-size:12px;color:var(--ink-3)}
+.foot .btn{height:28px;padding:0 10px;font-size:12px}
+
+.steps{list-style:none;margin:16px 0 4px}
+.steps li{display:flex;align-items:center;gap:10px;font-size:13px;padding:7px 0;color:var(--ink-3)}
+.steps li.done{color:var(--ink-2)}
+.steps li.now{color:var(--ink);font-weight:500}
+.mk{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;flex:none;border:1.5px solid var(--line-2)}
+.done .mk{background:var(--sage);border-color:var(--sage)}
+.done .mk svg{width:10px;height:10px;color:#fff}
+.now .mk{border-color:var(--clay);border-top-color:transparent;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.prog{height:4px;background:#ECE9E2;border-radius:2px;margin-top:14px;overflow:hidden}
+.prog i{display:block;height:100%;width:66%;background:var(--clay);border-radius:2px}
+.hint{font-size:12px;color:var(--ink-3);margin-top:10px;line-height:1.6}
+.handoff{display:flex;align-items:center;gap:10px;margin-top:4px}
+.arrow{color:var(--ink-3)}
+
+.toast{display:flex;gap:12px;align-items:flex-start;background:var(--ink);color:#fff;border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-win)}
+.toast .ok{width:22px;height:22px;border-radius:50%;background:var(--sage);display:grid;place-items:center;flex:none;margin-top:1px}
+.toast .ok svg{width:12px;height:12px}
+.toast p{font-size:13px;line-height:1.55}
+.toast .s{color:#BDB8AE;font-size:12px;margin-top:2px}
+kbd{font:inherit;font-size:11px;background:rgba(255,255,255,.12);border-radius:4px;padding:1px 5px}
+.toast a{color:#F2B59B;font-size:12px;text-decoration:none;white-space:nowrap;margin-top:2px}
+.col{display:flex;flex-direction:column;gap:28px;width:400px}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div>
+    <p class="label">主界面</p>
+    <div class="win">
+      <div class="bar">
+        <span class="logo"></span>
+        <span class="brand">接力<small>Relay</small></span>
+        <span class="grow"></span>
+        <span class="wbtn"><svg viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2"/></svg></span>
+        <span class="wbtn"><svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.2"/></svg></span>
+      </div>
+      <div class="body">
+        <div class="hero">
+          <div class="who">
+            <div class="av clay">主</div>
+            <div class="grow">
+              <div class="name">主号 <span class="pill pro">Pro</span></div>
+              <div class="mail">main@example.com</div>
+            </div>
+            <div class="live"><span class="dot"></span>使用中</div>
+          </div>
+          <div class="meters">
+            <div class="meter"><div class="k"><span>5 小时</span><span>16:17</span></div><div class="v">11%</div><div class="track"><i style="width:11%"></i></div></div>
+            <div class="meter"><div class="k"><span>本周</span><span>16:17</span></div><div class="v">31%</div><div class="track"><i style="width:31%"></i></div></div>
+          </div>
+          <div class="shared">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <span><b>37 个会话</b> 在所有账号间共用，换号后接着做</span>
+          </div>
+        </div>
+
+        <div class="sec"><h3>切换到</h3><a href="#">管理</a></div>
+        <div class="list">
+          <div class="row">
+            <div class="av sky">小</div>
+            <div class="meta">
+              <div class="name">小号 <span class="pill free">Free</span></div>
+              <div class="sub">backup@example.com</div>
+            </div>
+            <button class="btn primary">切换</button>
+          </div>
+          <div class="warn">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="flex:none;margin-top:2px"><path d="M8 5.5v3.2M8 11h.01M7.1 2.4L1.6 12a1 1 0 00.9 1.5h11a1 1 0 00.9-1.5L8.9 2.4a1 1 0 00-1.8 0z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Free 计划用不了 Claude Code，切过去看不到这些会话
+          </div>
+          <div class="add">
+            <div class="av ghost">+</div>
+            <span>保存当前登录的账号</span>
+          </div>
+        </div>
+
+        <div class="foot">
+          <span>切换约 6 秒，会重启 Claude</span>
+          <span class="grow"></span>
+          <button class="btn ghost">恢复备份</button>
+          <button class="btn ghost">日志</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div>
+      <p class="label">切换中</p>
+      <div class="win">
+        <div class="bar"><span class="logo"></span><span class="brand">接力<small>Relay</small></span></div>
+        <div class="body">
+          <div class="hero">
+            <div class="handoff">
+              <div class="av clay">主</div>
+              <svg class="arrow" width="20" height="12" viewBox="0 0 20 12" fill="none"><path d="M1 6h17m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <div class="av sky">小</div>
+              <div style="margin-left:4px"><div class="name">正在换到小号</div><div class="mail">失败会自动回滚，不用担心</div></div>
+            </div>
+            <ul class="steps">
+              <li class="done"><span class="mk"><svg viewBox="0 0 10 10" fill="none"><path d="M2 5.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>关闭 Claude</li>
+              <li class="done"><span class="mk"><svg viewBox="0 0 10 10" fill="none"><path d="M2 5.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>备份当前状态</li>
+              <li class="done"><span class="mk"><svg viewBox="0 0 10 10" fill="none"><path d="M2 5.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>换上小号的登录</li>
+              <li class="now"><span class="mk"></span>接上共享会话</li>
+              <li><span class="mk"></span>启动 Claude</li>
+              <li><span class="mk"></span>回到「项目了解」</li>
+            </ul>
+            <div class="prog"><i></i></div>
+            <p class="hint">这期间别手动打开 Claude。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <p class="label">切换完成</p>
+      <div class="toast">
+        <span class="ok"><svg viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.3 2.3 4.7-5" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <div class="grow">
+          <p>已换到小号，回到了「项目了解」</p>
+          <p class="s">按 <kbd>Ctrl</kbd> <kbd>V</kbd> 发送“继续”，它会接着做</p>
+        </div>
+        <a href="#">切回</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

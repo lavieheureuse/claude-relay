@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>接力 Relay 空状态</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --canvas:#ECEAE4; --win:#FBFAF7; --card:#FFFFFF; --line:#E7E4DC; --line-2:#D9D5CB; --soft:#F7F6F2;
+  --ink:#1D1C1A; --ink-2:#6B675F; --ink-3:#A29D93;
+  --clay:#D9734E; --clay-soft:#FBEDE6; --clay-ink:#9A4424;
+  --sky-soft:#E6F0FA; --sky-ink:#1F5689;
+  --sage:#3F8F6B; --sage-soft:#E7F3EC;
+  --shadow:0 1px 2px rgba(30,25,15,.04),0 8px 24px rgba(30,25,15,.06);
+  --shadow-win:0 2px 4px rgba(30,25,15,.05),0 24px 60px rgba(30,25,15,.14);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--canvas);font-family:Inter,"Noto Sans SC","Microsoft YaHei UI",system-ui,sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased;padding:48px 16px}
+.stage{display:flex;gap:40px;justify-content:center;flex-wrap:wrap;align-items:flex-start}
+.label{font-size:12px;color:var(--ink-2);letter-spacing:.04em;margin:0 0 12px 4px}
+.win{width:400px;background:var(--win);border-radius:14px;box-shadow:var(--shadow-win);overflow:hidden;border:1px solid rgba(0,0,0,.04)}
+.bar{display:flex;align-items:center;gap:10px;height:48px;padding:0 8px 0 18px}
+.logo{width:22px;height:22px;border-radius:7px;background:var(--clay);position:relative;flex:none}
+.logo:before,.logo:after{content:"";position:absolute;height:3px;border-radius:2px;background:#fff}
+.logo:before{top:7px;left:5px;width:12px}.logo:after{top:12px;left:6px;width:10px;opacity:.7}
+.brand{font-weight:600;font-size:14px}.brand small{font-weight:500;color:var(--ink-3);font-size:12px;margin-left:4px}
+.grow{flex:1}
+.wbtn{width:34px;height:30px;display:grid;place-items:center;color:var(--ink-2)}
+.body{padding:8px 22px 22px}
+
+.art{height:132px;border-radius:14px;background:linear-gradient(180deg,#F4F1EA 0%,#F9F7F2 100%);position:relative;display:flex;align-items:center;justify-content:center;gap:0;overflow:hidden;border:1px solid var(--line)}
+.art .av{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;font-weight:600;font-size:19px;box-shadow:0 6px 16px rgba(30,25,15,.08);position:relative;z-index:1}
+.art .a1{background:var(--clay-soft);color:var(--clay-ink)}
+.art .a2{background:var(--sky-soft);color:var(--sky-ink)}
+.art .a2.ghost{background:#fff;color:var(--ink-3);border:1.5px dashed var(--line-2);box-shadow:none}
+.art .track{width:120px;height:52px;position:relative}
+.art .track svg{position:absolute;inset:0}
+.art .baton{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:10px;background:var(--clay);display:grid;place-items:center;box-shadow:0 6px 14px rgba(217,115,78,.35)}
+.art .baton:before,.art .baton:after{content:"";position:absolute;height:3px;border-radius:2px;background:#fff}
+.art .baton:before{top:10px;left:7px;width:16px}.art .baton:after{top:16px;left:8px;width:13px;opacity:.7}
+.art .chips{position:absolute;bottom:10px;left:0;right:0;display:flex;justify-content:center;gap:6px}
+.chip{font-size:11px;color:var(--ink-2);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+
+h1{font-size:20px;font-weight:600;letter-spacing:.01em;margin:20px 0 6px}
+.lead{font-size:13px;line-height:1.7;color:var(--ink-2)}
+
+.detect{margin-top:18px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;display:flex;align-items:center;gap:12px}
+.detect .av{width:40px;height:40px;border-radius:12px;background:var(--clay-soft);color:var(--clay-ink);display:grid;place-items:center;font-weight:600}
+.detect .k{font-size:11px;color:var(--sage);display:flex;align-items:center;gap:5px}
+.detect .k i{width:6px;height:6px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 3px var(--sage-soft)}
+.detect .v{font-size:14px;font-weight:500;margin-top:2px}
+.btn{font:inherit;font-size:13px;font-weight:500;height:34px;padding:0 16px;border-radius:9px;border:0;background:var(--ink);color:#fff;white-space:nowrap}
+
+.steps{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:16px}
+.step{border-radius:10px;padding:10px 10px 11px;background:var(--soft)}
+.step .n{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:600;background:#fff;color:var(--ink-2);border:1px solid var(--line-2)}
+.step.on{background:var(--clay-soft)}
+.step.on .n{background:var(--clay);color:#fff;border-color:var(--clay)}
+.step .t{font-size:12px;font-weight:500;margin-top:8px}
+.step .d{font-size:11px;color:var(--ink-2);margin-top:2px;line-height:1.5}
+.step.on .t{color:var(--clay-ink)}
+
+.note{display:flex;align-items:center;gap:6px;margin-top:16px;font-size:11.5px;color:var(--ink-3)}
+.note svg{width:13px;height:13px}
+
+.empty-detect{margin-top:18px;border:1.5px dashed var(--line-2);border-radius:12px;padding:16px;text-align:center;font-size:13px;color:var(--ink-2);line-height:1.7}
+.empty-detect b{color:var(--ink);font-weight:500}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div>
+    <p class="label">空状态 · 检测到已登录的账号</p>
+    <div class="win">
+      <div class="bar">
+        <span class="logo"></span><span class="brand">接力<small>Relay</small></span>
+        <span class="grow"></span>
+        <span class="wbtn"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2"/></svg></span>
+        <span class="wbtn"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.2"/></svg></span>
+      </div>
+      <div class="body">
+        <div class="art">
+          <div class="av a1">A</div>
+          <div class="track">
+            <svg viewBox="0 0 120 52" fill="none"><path d="M4 26h112" stroke="#D9D5CB" stroke-width="1.5" stroke-dasharray="3 4"/></svg>
+            <div class="baton"></div>
+          </div>
+          <div class="av a2 ghost">B</div>
+          <div class="chips"><span class="chip">登录状态</span><span class="chip">会话列表</span><span class="chip">回到原会话</span></div>
+        </div>
+
+        <h1>一个号用完，换个号接着干</h1>
+        <p class="lead">把你的几个 Claude 账号存下来，额度用完时点一下就换号。会话列表跟着走，切过去自动回到刚才那个会话。</p>
+
+        <div class="detect">
+          <div class="av">M</div>
+          <div class="grow">
+            <div class="k"><i></i>Claude 当前登录</div>
+            <div class="v">main@example.com</div>
+          </div>
+          <button class="btn">保存这个号</button>
+        </div>
+
+        <div class="steps">
+          <div class="step on"><span class="n">1</span><div class="t">存下当前号</div><div class="d">约 5 秒，Claude 会重启</div></div>
+          <div class="step"><span class="n">2</span><div class="t">换号再存</div><div class="d">在 Claude 里换号登录</div></div>
+          <div class="step"><span class="n">3</span><div class="t">一键切换</div><div class="d">之后随时互切</div></div>
+        </div>
+
+        <p class="note"><svg viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 7V5.5a2.5 2.5 0 015 0V7" stroke="currentColor" stroke-width="1.3"/></svg>只在这台电脑上保存登录状态，不存密码，不联网</p>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <p class="label">空状态 · 已存 1 个号，等第二个</p>
+    <div class="win">
+      <div class="bar">
+        <span class="logo"></span><span class="brand">接力<small>Relay</small></span>
+        <span class="grow"></span>
+        <span class="wbtn"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2"/></svg></span>
+        <span class="wbtn"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.2"/></svg></span>
+      </div>
+      <div class="body">
+        <div class="art">
+          <div class="av a1">主</div>
+          <div class="track">
+            <svg viewBox="0 0 120 52" fill="none"><path d="M4 26h112" stroke="#D9D5CB" stroke-width="1.5" stroke-dasharray="3 4"/></svg>
+            <div class="baton"></div>
+          </div>
+          <div class="av a2 ghost">?</div>
+        </div>
+
+        <h1>再存一个号就能接力了</h1>
+        <p class="lead">「主号」已经存好。在 Claude 里退出，用另一个账号登录，回来点保存。</p>
+
+        <div class="empty-detect">Claude 现在登录的还是 <b>main@example.com</b><br>换号登录后，这里会出现「保存这个号」</div>
+
+        <div class="steps">
+          <div class="step"><span class="n" style="background:var(--sage);border-color:var(--sage);color:#fff">✓</span><div class="t">存下当前号</div><div class="d">主号</div></div>
+          <div class="step on"><span class="n">2</span><div class="t">换号再存</div><div class="d">在 Claude 里换号登录</div></div>
+          <div class="step"><span class="n">3</span><div class="t">一键切换</div><div class="d">之后随时互切</div></div>
+        </div>
+
+        <p class="note"><svg viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 7V5.5a2.5 2.5 0 015 0V7" stroke="currentColor" stroke-width="1.3"/></svg>只在这台电脑上保存登录状态，不存密码，不联网</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

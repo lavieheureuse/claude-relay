@@ -1,0 +1,21 @@
+# 编译产物
+dist/
+*.exe
+*.pdb
+
+# 测试运行时生成的数据
+tests/run-*/
+
+# 本地探测工具和运行截图（截图里可能有账号邮箱）
+probe/
+design/runtime-*.png
+design/claude-sidebar.png
+
+# 旧版深色设计稿（已被 relay-*.html 取代；mockup.png 里有真实邮箱）
+design/mockup.png
+design/mockup.html
+design/design.md
+
+# 便携版数据（含登录凭证）
+ClaudeRelay-data/
+data/
