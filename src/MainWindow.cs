@@ -159,7 +159,7 @@ namespace ClaudeSwitch
                 Dispatcher.BeginInvoke(new Action(() => RunDemoSwitch(store.Accounts[store.Accounts.Count - 1])));
         }
 
-        private static readonly string[] SwitchSteps = { "关闭 Claude", "备份当前状态", "换上账号登录", "接上共享会话", "启动 Claude", "回到原来的会话" };
+        private static readonly string[] SwitchSteps = { "关闭 Claude", "备份当前状态", "换上账号登录", "同步会话列表", "启动 Claude", "回到原来的会话" };
 
         private void RunDemoSwitch(Account a)
         {
@@ -252,6 +252,9 @@ namespace ClaudeSwitch
             var en = UI.Text("Relay", 12, UI.Ink3);
             en.Margin = new Thickness(5, 1, 0, 0);
             left.Children.Add(en);
+            var ver = UI.Text("v" + Installer.Version, 11, UI.Ink3);
+            ver.Margin = new Thickness(6, 2, 0, 0);
+            left.Children.Add(ver);
             bar.Children.Add(left);
 
             var ctl = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 8, 0) };

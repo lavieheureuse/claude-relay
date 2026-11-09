@@ -8,8 +8,8 @@ using System.Windows;
 [assembly: AssemblyTitle("接力 Relay")]
 [assembly: AssemblyProduct("接力 Relay")]
 [assembly: AssemblyDescription("Claude 多账号切换，会话接着用")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.1.0")]
+[assembly: AssemblyFileVersion("1.0.1.0")]
 
 namespace ClaudeSwitch
 {

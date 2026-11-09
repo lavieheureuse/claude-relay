@@ -148,13 +148,52 @@ public class TestHarness
         // 会话列表共享：两个账号的目录都是联接，且指向同一份数据
         var dirA = Path.Combine(data, "claude-code-sessions", uuidA, org);
         var dirB = Path.Combine(data, "claude-code-sessions", uuidB, org);
-        Check("A session dir is junction", Engine.IsReparsePoint(dirA));
-        Check("B session dir is junction", Engine.IsReparsePoint(dirB));
-        Check("shared has A's session", File.Exists(Path.Combine(dirB, "local_a.json")));
-        Check("shared has B's session", File.Exists(Path.Combine(dirA, "local_b.json")));
+        // 桌面端拒绝往联接里写会话，这两个目录必须是真实目录
+        Check("A session dir is a real directory", Directory.Exists(dirA) && !Engine.IsReparsePoint(dirA));
+        Check("B session dir is a real directory", Directory.Exists(dirB) && !Engine.IsReparsePoint(dirB));
+        Check("B has A's session", File.Exists(Path.Combine(dirB, "local_a.json")));
+        Check("A has B's session", File.Exists(Path.Combine(dirA, "local_b.json")));
+        Check("session index backed up", Directory.GetDirectories(Path.Combine(store, "backups"), "session-index", SearchOption.AllDirectories).Length > 0);
+
+        // 在 B 上新建的会话、改动的会话，同步后 A 能看到；A 上的旧副本不会盖掉 B 的新内容
+        var eSync = new Engine();
+        var syncStore = eSync.LoadStore();
         Write(Path.Combine(dirB, "local_newOnB.json"), "{\"sessionId\":\"local_newOnB\"}");
+        Write(Path.Combine(dirB, "local_a.json"), "{\"edited\":\"onB\"}");
+        File.SetLastWriteTimeUtc(Path.Combine(dirB, "local_a.json"), DateTime.UtcNow.AddMinutes(5));
+        eSync.ShareSessionIndex(syncStore, null);
         Check("session created on B visible on A", File.Exists(Path.Combine(dirA, "local_newOnB.json")));
-        Check("original dirs backed up", Directory.GetDirectories(Path.Combine(store, "backups"), "session-index", SearchOption.AllDirectories).Length > 0);
+        Check("newer edit wins", File.ReadAllText(Path.Combine(dirA, "local_a.json")).Contains("onB"));
+
+        // 在 B 上删除的会话不会被 A 的副本同步回来
+        File.Delete(Path.Combine(dirB, "local_newOnB.json"));
+        Write(Path.Combine(dirB, "deleted_newOnB"), "1");
+        eSync.ShareSessionIndex(syncStore, null);
+        Check("deleted session stays deleted on B", !File.Exists(Path.Combine(dirB, "local_newOnB.json")));
+        Check("deleted session removed from A", !File.Exists(Path.Combine(dirA, "local_newOnB.json")));
+
+        // 运行状态不同步
+        Write(Path.Combine(dirB, "waiting-input", "local_x.json"), "{}");
+        eSync.ShareSessionIndex(syncStore, null);
+        Check("waiting-input not synced", !File.Exists(Path.Combine(dirA, "waiting-input", "local_x.json")));
+
+        // 从 1.0.0 升级：联接换回真实目录，中转目录里的会话不丢
+        var sharedDir = Path.Combine(data, "claude-switch-shared", "claude-code-sessions");
+        Directory.Delete(@"\\?\" + Path.GetFullPath(dirA), true);
+        var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \"" + dirA + "\" \"" + sharedDir + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+        mk.WaitForExit();
+        var shortEnough = Engine.IsReparsePoint(dirA); // 测试目录太深时 mklink 会失败，此时跳过这组检查
+        if (shortEnough)
+        {
+            eSync.ShareSessionIndex(syncStore, null);
+            Check("junction converted to real directory", Directory.Exists(dirA) && !Engine.IsReparsePoint(dirA));
+            Check("sessions kept after conversion", File.Exists(Path.Combine(dirA, "local_b.json")) && File.Exists(Path.Combine(sharedDir, "local_b.json")));
+        }
+        else
+        {
+            Console.WriteLine("SKIP junction conversion (path too long for mklink)");
+            eSync.ShareSessionIndex(syncStore, null);
+        }
 
         // 故障场景 1：Cookies 被占用时，切换应安全失败，不破坏当前状态
         Console.WriteLine("step: failure - cookies locked");

@@ -1,4 +1,4 @@
-﻿# 接力 Relay
+# 接力 Relay
 
 Claude 桌面端多账号切换工具（Windows）。一个号的额度用完，点一下换到另一个号，**会话列表跟着走，切过去自动回到刚才那个会话**，接着干。
 
@@ -53,7 +53,7 @@ exe 没有代码签名，Windows 可能提示“未知发布者”，点「更�
 
 里面有 `profiles`（各账号的登录状态快照，**含登录凭证，不要分享**）、`backups`（切换前的备份）和 `logs`。
 
-各账号共用的会话列表放在 Claude 自己的数据目录 `%LOCALAPPDATA%\Claude-Data\claude_*\claude-switch-shared`，原来按账号分开的目录会换成指向它的目录联接。卸载接力不会影响这些会话。
+切号时（Claude 已关闭）接力会把各账号的会话列表合并，同名文件保留较新的，中转目录是 Claude 数据目录下的 `claude-switch-shared`。卸载接力不会影响这些会话。
 
 ## 构建
 

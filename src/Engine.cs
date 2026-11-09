@@ -876,67 +876,116 @@ namespace ClaudeSwitch
         // ------------------------------------------------------------ session index
 
         // 桌面端把左侧会话列表存在 <DataDir>\<root>\<账号UUID>\<组织UUID>\ 下，按账号隔离。
-        // 做法：所有已保存账号的这些目录都改成目录联接（junction），指向同一个共享目录，
-        // 这样不管当前登录哪个号，读写的都是同一份会话列表，不需要切换时来回复制。
-        // （会话正文 ~/.claude/projects 本来就与账号无关，所以联接之后可以直接接着聊。）
+        // 做法：切号时（Claude 已关闭）在各账号的真实目录之间同步：
+        //   先把各账号目录合并进中转目录 claude-switch-shared（同名文件保留较新的），再分发回每个账号目录。
+        // 这些目录必须是真实目录：桌面端保存会话前会检查，遇到符号链接或目录联接会拒绝写入
+        // （PlantDetectedError），会话就再也存不下来。1.0.0 用的是联接，这里会自动换回真实目录。
+        // （会话正文 ~/.claude/projects 本来就与账号无关，所以同步列表之后可以直接接着聊。）
         private static readonly string[] SessionRoots = { "claude-code-sessions", "local-agent-mode-sessions" };
+
+        // waiting-input 记录的是运行中的会话状态，同步过去只会留下过期提示
+        private const string TransientSessionDir = "waiting-input";
 
         public string SharedSessionDir(string root)
         {
             return Path.Combine(DataDir, "claude-switch-shared", root);
         }
 
+        // 必须在 Claude 关闭时调用
         public void ShareSessionIndex(Store store, string backupDir)
         {
             if (string.IsNullOrEmpty(DataDir) || store == null) return;
             foreach (var root in SessionRoots)
             {
                 var shared = SharedSessionDir(root);
-                Directory.CreateDirectory(shared);
-                foreach (var acc in store.Accounts)
+                Directory.CreateDirectory(LP(shared));
+                var orgDirs = SessionOrgDirs(store, root);
+
+                try
                 {
-                    if (string.IsNullOrEmpty(acc.AccountUuid)) continue;
-                    var accRoot = Path.Combine(DataDir, root, acc.AccountUuid);
-                    var orgDirs = new List<string>();
-                    try { if (Directory.Exists(accRoot)) orgDirs.AddRange(Directory.GetDirectories(accRoot)); }
-                    catch { }
-                    // 还没用过的账号也预先建好联接，第一次登录就能看到会话
-                    if (!string.IsNullOrEmpty(acc.OrgUuid))
+                    if (!string.IsNullOrEmpty(backupDir)) MergeSessions(shared, Path.Combine(backupDir, "session-index", root));
+                }
+                catch (Exception ex) { Log("备份会话列表失败：" + ex.Message); }
+
+                // 1. 收集：把各账号目录合并进中转目录；遇到旧版留下的联接，只移除联接本身
+                foreach (var orgDir in orgDirs)
+                {
+                    try
                     {
-                        var known = Path.Combine(accRoot, acc.OrgUuid);
-                        if (!orgDirs.Any(d => string.Equals(d, known, StringComparison.OrdinalIgnoreCase)))
-                            orgDirs.Add(known);
-                    }
-                    foreach (var orgDir in orgDirs)
-                    {
-                        try
+                        if (IsReparsePoint(orgDir))
                         {
-                            var bk = string.IsNullOrEmpty(backupDir) ? null
-                                : Path.Combine(backupDir, "session-index", root, acc.AccountUuid, Path.GetFileName(orgDir));
-                            LinkToShared(orgDir, shared, bk);
+                            Directory.Delete(LP(orgDir), false);
+                            Log("已把目录联接换回真实目录：" + orgDir);
                         }
-                        catch (Exception ex) { Log("共享会话列表失败：" + orgDir + " : " + ex.Message); }
+                        else if (Directory.Exists(LP(orgDir)))
+                        {
+                            MergeSessions(orgDir, shared);
+                        }
                     }
+                    catch (Exception ex) { Log("收集会话列表失败：" + orgDir + " : " + ex.Message); }
+                }
+                ApplyDeleteMarkers(shared, shared);
+
+                // 2. 分发：每个账号目录都拿到完整的一份
+                foreach (var orgDir in orgDirs)
+                {
+                    try
+                    {
+                        if (IsReparsePoint(orgDir)) { Log("目录联接没能移除，跳过：" + orgDir); continue; }
+                        MergeSessions(shared, orgDir);
+                        ApplyDeleteMarkers(shared, orgDir);
+                    }
+                    catch (Exception ex) { Log("同步会话列表失败：" + orgDir + " : " + ex.Message); }
                 }
             }
         }
 
-        private void LinkToShared(string orgDir, string shared, string backup)
+        private List<string> SessionOrgDirs(Store store, string root)
         {
-            if (IsReparsePoint(orgDir)) return; // 已经是联接
-            if (Directory.Exists(orgDir))
+            var result = new List<string>();
+            foreach (var acc in store.Accounts)
             {
-                CopyTree(orgDir, shared, true);
-                if (!string.IsNullOrEmpty(backup)) CopyTree(orgDir, backup, false);
-                TryDeleteDir(orgDir);
-                if (Directory.Exists(orgDir)) throw new Exception("原目录删除失败，可能被占用");
+                if (string.IsNullOrEmpty(acc.AccountUuid)) continue;
+                var accRoot = Path.Combine(DataDir, root, acc.AccountUuid);
+                try { if (Directory.Exists(LP(accRoot))) result.AddRange(Directory.GetDirectories(accRoot)); }
+                catch { }
+                // 账号还没写过会话时目录不存在，也提前建好，第一次登录就能看到会话
+                foreach (var org in new[] { acc.OrgUuid, GetInsight(acc, false).DesktopOrg })
+                {
+                    if (string.IsNullOrEmpty(org)) continue;
+                    var known = Path.Combine(accRoot, org);
+                    if (!result.Any(d => string.Equals(d, known, StringComparison.OrdinalIgnoreCase))) result.Add(known);
+                }
             }
-            else
+            return result;
+        }
+
+        private static void MergeSessions(string src, string dst)
+        {
+            Directory.CreateDirectory(LP(dst));
+            foreach (var f in Directory.GetFiles(LP(src)))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(orgDir));
+                var target = LP(Path.Combine(dst, Path.GetFileName(f)));
+                if (!File.Exists(target) || File.GetLastWriteTimeUtc(f) > File.GetLastWriteTimeUtc(target))
+                    CopyFileRetry(f, target);
             }
-            CreateJunction(orgDir, shared);
-            Log("会话列表已共享：" + orgDir);
+            foreach (var d in Directory.GetDirectories(LP(src)))
+            {
+                var name = Path.GetFileName(d);
+                if (IsReparsePoint(d) || string.Equals(name, TransientSessionDir, StringComparison.OrdinalIgnoreCase)) continue;
+                CopyTree(Path.Combine(src, name), Path.Combine(dst, name), true);
+            }
+        }
+
+        // 在一个号上删掉的会话，不能被另一个号的副本同步回来
+        private static void ApplyDeleteMarkers(string markersDir, string dir)
+        {
+            foreach (var marker in Directory.GetFiles(LP(markersDir), "deleted_*"))
+            {
+                var id = Path.GetFileName(marker).Substring("deleted_".Length);
+                var session = LP(Path.Combine(dir, "local_" + id + ".json"));
+                try { if (File.Exists(session)) File.Delete(session); } catch { }
+            }
         }
 
         // 复制目录树（支持超过 260 字符的路径）。
@@ -966,23 +1015,6 @@ namespace ClaudeSwitch
                 return (File.GetAttributes(LP(dir)) & FileAttributes.ReparsePoint) != 0;
             }
             catch { return false; }
-        }
-
-        private static void CreateJunction(string link, string target)
-        {
-            // 目录联接不需要管理员权限
-            var psi = new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + link + "\" \"" + target + "\"");
-            psi.UseShellExecute = false;
-            psi.CreateNoWindow = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            using (var p = Process.Start(psi))
-            {
-                var err = p.StandardError.ReadToEnd();
-                p.StandardOutput.ReadToEnd();
-                p.WaitForExit(15000);
-                if (!IsReparsePoint(link)) throw new Exception("创建目录联接失败：" + err.Trim());
-            }
         }
 
         // ------------------------------------------------------------ email scrub
