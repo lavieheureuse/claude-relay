@@ -18,6 +18,12 @@ namespace ClaudeSwitch
         [STAThread]
         public static void Main(string[] args)
         {
+            if (args.Length == 3 && string.Equals(args[0], "--finish-uninstall", StringComparison.OrdinalIgnoreCase))
+            {
+                Installer.FinishUninstall(args[1], args[2]);
+                return;
+            }
+
             Engine.Trace("main start");
 
             if (args.Any(a => string.Equals(a, "--uninstall", StringComparison.OrdinalIgnoreCase)))

@@ -195,6 +195,87 @@ public class TestHarness
             eSync.ShareSessionIndex(syncStore, null);
         }
 
+        // 从桌面端日志补回 Remote Control 对应关系，列表才不会多出重复条目
+        var localX = "local_11111111-1111-1111-1111-111111111111";
+        var cliOld = "22222222-2222-2222-2222-222222222222";
+        var cliNew = "33333333-3333-3333-3333-333333333333";
+        var localA = "local_44444444-4444-4444-4444-444444444444";
+        var localB = "local_55555555-5555-5555-5555-555555555555";
+        var imported = Path.Combine(dirB, "local_" + cliNew + ".json");
+        var archivedOld = Path.Combine(dirB, "local_" + cliOld + ".json");
+        var hasIds = Path.Combine(dirB, localA + ".json");
+        var ambiguous = Path.Combine(dirB, localB + ".json");
+        Write(imported, "{\"sessionId\":\"local_" + cliNew + "\",\"cliSessionId\":\"" + cliNew + "\",\"lastActivityAt\":5}");
+        Write(archivedOld, "{\"sessionId\":\"local_" + cliOld + "\",\"cliSessionId\":\"" + cliOld + "\",\"isArchived\":true,\"lastActivityAt\":9}");
+        Write(hasIds, "{\"sessionId\":\"" + localA + "\",\"bridgeSessionIds\":[\"session_01newest\"],\"lastActivityAt\":3}");
+        Write(ambiguous, "{\"sessionId\":\"" + localB + "\",\"lastActivityAt\":2}");
+        Write(Path.Combine(data, "logs", "main.log"),
+            "x [info] Mapping internal session " + localX + " to CLI session " + cliOld + "\n" +
+            "x [info] Mapping internal session " + localX + " to CLI session " + cliNew + "\n" +
+            "x [info] Enabling remote control for session " + localX + "\n" +
+            "x [info] Remote control enabled: \"https://claude.ai/code/session_01first\"\n" +
+            "x [info] Enabling remote control for session " + localX + "\n" +
+            "x [info] Remote control enabled: \"https://claude.ai/code/session_01second\"\n" +
+            "x [info] Enabling remote control for session " + localA + "\n" +
+            "x [info] Remote control enabled: \"https://claude.ai/code/session_01older\"\n" +
+            "x [info] Enabling remote control for session " + localA + "\n" +
+            "x [info] Enabling remote control for session " + localB + "\n" +
+            "x [info] Remote control enabled: \"https://claude.ai/code/session_01mixed\"\n");
+        eSync.ShareSessionIndex(syncStore, null);
+        var repaired = File.ReadAllText(Path.Combine(dirA, "local_" + cliNew + ".json"));
+        Check("bridge ids linked to live session via CLI mapping", repaired.Contains("session_01first") && repaired.Contains("session_01second"));
+        Check("archived branch left untouched", !File.ReadAllText(Path.Combine(dirA, "local_" + cliOld + ".json")).Contains("session_01first"));
+        var withIds = File.ReadAllText(Path.Combine(dirA, localA + ".json"));
+        Check("newest bridge id stays last", withIds.IndexOf("session_01older") >= 0 && withIds.IndexOf("session_01older") < withIds.IndexOf("session_01newest"));
+        Check("ambiguous log lines not paired", !File.ReadAllText(Path.Combine(dirA, localA + ".json")).Contains("session_01mixed") && !File.ReadAllText(Path.Combine(dirA, localB + ".json")).Contains("session_01mixed"));
+        eSync.ShareSessionIndex(syncStore, null);
+        var again = File.ReadAllText(Path.Combine(dirA, "local_" + cliNew + ".json"));
+        Check("repair is idempotent", again.Split(new[] { "session_01first" }, StringSplitOptions.None).Length == 2);
+        // 在一个号上删除/归档的会话，要带到拥有云端记录的账号
+        var delLocal = "local_66666666-6666-6666-6666-666666666666";
+        var liveLocal = "local_77777777-7777-7777-7777-777777777777";
+        var archLocal = "local_88888888-8888-8888-8888-888888888888";
+        Write(Path.Combine(dirA, delLocal + ".json"), "{\"sessionId\":\"" + delLocal + "\",\"bridgeSessionIds\":[\"session_01todelete\"]}");
+        Write(Path.Combine(dirB, liveLocal + ".json"), "{\"sessionId\":\"" + liveLocal + "\",\"bridgeSessionIds\":[\"cse_01stilllive\"]}");
+        Write(Path.Combine(dirB, archLocal + ".json"), "{\"sessionId\":\"" + archLocal + "\",\"isArchived\":true,\"bridgeSessionIds\":[\"session_01archived\"]}");
+        Write(Path.Combine(dirB, "deleted_" + delLocal.Substring(6)), "1");
+        Write(Path.Combine(data, "logs", "main.log"),
+            "x [info] Enabling remote control for session " + delLocal + "\n" +
+            "x [info] Remote control enabled: \"https://claude.ai/code/session_01fromlog\"\n" +
+            "x [info] Enabling remote control for session " + liveLocal + "\n" +
+            "x [info] Remote control enabled: \"https://claude.ai/code/session_01stilllive\"\n");
+        eSync.ShareSessionIndex(syncStore, null);
+        Func<string, string> owed = id => { using (var h = System.Security.Cryptography.SHA256.Create()) { var sb = new StringBuilder("owed-bridge-delete_"); foreach (var x in h.ComputeHash(Encoding.UTF8.GetBytes(id))) sb.Append(x.ToString("x2")); return sb.ToString(); } };
+        var noteA = Path.Combine(dirA, owed("session_01todelete"));
+        Check("deleted session's cloud copy queued on other account", File.Exists(noteA) && File.Exists(Path.Combine(dirB, owed("session_01todelete"))));
+        Check("id found only in logs is queued too", File.Exists(Path.Combine(dirA, owed("session_01fromlog"))));
+        var noteText = File.Exists(noteA) ? File.ReadAllText(noteA) : "";
+        Check("note matches desktop format", noteText.Contains("\"version\":3") && noteText.Contains("\"state\":\"owed\"") && noteText.Contains("\"action\":\"delete\"") && noteText.Contains("\"remoteId\":\"session_01todelete\"") && noteText.Contains("\"sessionId\":\"" + delLocal + "\""));
+        Check("live session never queued", !File.Exists(Path.Combine(dirA, owed("session_01stilllive"))) && !File.Exists(Path.Combine(dirA, owed("cse_01stilllive"))));
+        var archNote = Path.Combine(dirA, owed("session_01archived"));
+        Check("archived session queued as archive", File.Exists(archNote) && File.ReadAllText(archNote).Contains("\"action\":\"archive\""));
+        Check("notes not copied to transit dir", !File.Exists(Path.Combine(sharedDir, owed("session_01todelete"))));
+        File.Delete(noteA);
+        eSync.ShareSessionIndex(syncStore, null);
+        Check("handled note not queued again", !File.Exists(noteA));
+        foreach (var d in new[] { dirA, dirB, sharedDir })
+        {
+            foreach (var f in Directory.GetFiles(d, "owed-bridge-delete_*")) File.Delete(f);
+            foreach (var n in new[] { liveLocal, archLocal, delLocal })
+            {
+                var p = Path.Combine(d, n + ".json");
+                if (File.Exists(p)) File.Delete(p);
+                p = Path.Combine(d, "deleted_" + n.Substring(6));
+                if (File.Exists(p)) File.Delete(p);
+            }
+        }
+        foreach (var f in new[] { imported, archivedOld, hasIds, ambiguous })
+            foreach (var d in new[] { dirA, dirB, sharedDir })
+            {
+                var p = Path.Combine(d, Path.GetFileName(f));
+                if (File.Exists(p)) File.Delete(p);
+            }
+
         // 故障场景 1：Cookies 被占用时，切换应安全失败，不破坏当前状态
         Console.WriteLine("step: failure - cookies locked");
         var lockPath = Path.Combine(data, "Network", "Cookies");
@@ -237,6 +318,16 @@ public class TestHarness
         Check("switch B->A again ok", r3.Ok);
         Check("desktop uuid A again", ReadUuid(data) == uuidA);
         Check("identity A again", ReadEmail(home) == "a@test.com");
+
+        // 版本比较和“被挪动”的判断
+        Check("newer version detected", Installer.IsNewerVersion("1.0.2", "1.0.1.0"));
+        Check("same version is not newer", !Installer.IsNewerVersion("1.0.1", "1.0.1.0"));
+        Check("older version is not newer", !Installer.IsNewerVersion("1.0.0", "1.0.1.0"));
+        Check("unreadable installed version allows update", Installer.IsNewerVersion("1.0.1", null));
+        Check("moved exe detected", Installer.LooksMoved(@"D:\a\ClaudeRelay", false, @"D:\b"));
+        Check("normal install not moved", !Installer.LooksMoved(@"D:\a\ClaudeRelay", true, @"D:\b"));
+        Check("running from registered dir not moved", !Installer.LooksMoved(@"D:\a\ClaudeRelay", false, @"D:\a\ClaudeRelay\"));
+        Check("never installed not moved", !Installer.LooksMoved(null, false, @"D:\b"));
 
         Console.WriteLine();
         Console.WriteLine(fails == 0 ? "ALL PASS" : (fails + " FAILURES"));

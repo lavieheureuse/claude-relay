@@ -925,6 +925,13 @@ namespace ClaudeSwitch
                     catch (Exception ex) { Log("收集会话列表失败：" + orgDir + " : " + ex.Message); }
                 }
                 ApplyDeleteMarkers(shared, shared);
+                if (root == "claude-code-sessions")
+                {
+                    try { var n = RepairBridgeLinks(shared); if (n > 0) Log("补回 Remote Control 对应关系：" + n + " 条"); }
+                    catch (Exception ex) { Log("补回 Remote Control 对应关系失败：" + ex.Message); }
+                    try { var n = QueueCloudCleanup(store, shared); if (n > 0) Log("同步云端删除/归档：" + n + " 条"); }
+                    catch (Exception ex) { Log("同步云端删除/归档失败：" + ex.Message); }
+                }
 
                 // 2. 分发：每个账号目录都拿到完整的一份
                 foreach (var orgDir in orgDirs)
@@ -937,6 +944,134 @@ namespace ClaudeSwitch
                     }
                     catch (Exception ex) { Log("同步会话列表失败：" + orgDir + " : " + ex.Message); }
                 }
+            }
+        }
+
+        // 左侧 Remote Control 分组的条目来自当前账号的云端记录。桌面端按“未归档本地会话的 bridgeSessionIds”去重，
+        // 本地记录里有这个 id，云端条目就不再单独显示。本地记录缺了 id 时（比如 1.0.0 期间存不进去），
+        // 同一个会话就会多出一行带警告的条目，而且只有创建它的账号能看到，两个号的列表就对不齐了。
+        // 这里从桌面端自己的日志恢复对应关系，全程不联网：
+        //   Enabling remote control for session <本地 id> + Remote control enabled: <云端 id>
+        //   Mapping internal session <本地 id> to CLI session <对话 id>（恢复或分叉后一个本地 id 会对应多个对话）
+        // 必须在 Claude 关闭时调用。返回补回的条数，重复调用不会重复写入。
+        public int RepairBridgeLinks(string sessionsDir)
+        {
+            var bridges = new List<KeyValuePair<string, string>>();
+            var clis = new Dictionary<string, HashSet<string>>();
+            ReadBridgeLogs(bridges, clis);
+            if (bridges.Count == 0) return 0;
+
+            var sessions = new List<BridgeSession>();
+            foreach (var f in Directory.GetFiles(LP(sessionsDir), "local_*.json"))
+            {
+                try
+                {
+                    var d = Js.DeserializeObject(File.ReadAllText(f, new UTF8Encoding(false))) as Dictionary<string, object>;
+                    if (d == null) continue;
+                    object v;
+                    if (d.TryGetValue("isArchived", out v) && v is bool && (bool)v) continue; // 归档的不参与去重
+                    var s = new BridgeSession { Path = f, Data = d, Id = Path.GetFileNameWithoutExtension(f) };
+                    s.Cli = d.TryGetValue("cliSessionId", out v) ? Convert.ToString(v) : null;
+                    s.LastActivity = d.TryGetValue("lastActivityAt", out v) && v != null ? Convert.ToDouble(v) : 0;
+                    s.Ids = new List<string>();
+                    if (d.TryGetValue("bridgeSessionId", out v) && v is string) s.Ids.Add((string)v);
+                    if (d.TryGetValue("bridgeSessionIds", out v) && v is object[])
+                        s.Ids.AddRange(((object[])v).OfType<string>());
+                    sessions.Add(s);
+                }
+                catch { }
+            }
+
+            var added = new HashSet<BridgeSession>();
+            var count = 0;
+            foreach (var pair in bridges)
+            {
+                if (sessions.Any(s => s.Ids.Contains(pair.Value) || s.Pending.Contains(pair.Value))) continue;
+                HashSet<string> cli;
+                clis.TryGetValue(pair.Key, out cli);
+                // 目标：本地 id 相同，或指向这个本地会话的任一对话（导入的会话文件名是 local_<对话 id>）；有多个时用最近活动的
+                var target = sessions
+                    .Where(s => s.Id == pair.Key || (cli != null && (cli.Contains(s.Cli ?? "") || (s.Id.StartsWith("local_") && cli.Contains(s.Id.Substring(6))))))
+                    .OrderByDescending(s => s.LastActivity)
+                    .FirstOrDefault();
+                if (target == null) continue;
+                target.Pending.Add(pair.Value);
+                added.Add(target);
+                count++;
+            }
+
+            foreach (var s in added)
+            {
+                // 放在已有 id 前面：桌面端重连时取最后一个，不能改变它
+                var existing = new List<object>();
+                object v;
+                if (s.Data.TryGetValue("bridgeSessionIds", out v) && v is object[]) existing.AddRange((object[])v);
+                s.Data["bridgeSessionIds"] = s.Pending.Cast<object>().Concat(existing).ToArray();
+                WriteAllTextAtomic(s.Path, Js.Serialize(s.Data));
+            }
+            return count;
+        }
+
+        private class BridgeSession
+        {
+            public string Path;
+            public string Id;
+            public string Cli;
+            public double LastActivity;
+            public Dictionary<string, object> Data;
+            public List<string> Ids;
+            public readonly List<string> Pending = new List<string>();
+        }
+
+        private void ReadBridgeLogs(List<KeyValuePair<string, string>> bridges, Dictionary<string, HashSet<string>> clis)
+        {
+            const string EnableMark = "Enabling remote control for session ";
+            const string DoneMark = "Remote control enabled:";
+            const string MapMark = "Mapping internal session ";
+            var enable = new System.Text.RegularExpressions.Regex(@"(local_[0-9a-f-]{36})");
+            var done = new System.Text.RegularExpressions.Regex(@"claude\.ai/code/(session_[0-9A-Za-z]+)");
+            var map = new System.Text.RegularExpressions.Regex(@"(local_[0-9a-f-]{36}) to CLI session ([0-9a-f-]{36})");
+
+            var dirs = new[] { Path.Combine(LocalApp, "Claude", "logs"), string.IsNullOrEmpty(DataDir) ? null : Path.Combine(DataDir, "logs") };
+            var files = new List<string>();
+            foreach (var d in dirs.Where(x => x != null && Directory.Exists(x)))
+                files.AddRange(Directory.GetFiles(d, "main*.log").Where(f => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(f), @"^main\d*\.log$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)));
+
+            foreach (var f in files.OrderBy(x => File.GetLastWriteTimeUtc(x)))
+            {
+                try
+                {
+                    var pending = new List<string>();
+                    using (var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    using (var r = new StreamReader(fs, new UTF8Encoding(false)))
+                    {
+                        string line;
+                        while ((line = r.ReadLine()) != null)
+                        {
+                            if (line.IndexOf(MapMark, StringComparison.Ordinal) >= 0)
+                            {
+                                var m = map.Match(line);
+                                if (!m.Success) continue;
+                                HashSet<string> set;
+                                if (!clis.TryGetValue(m.Groups[1].Value, out set)) clis[m.Groups[1].Value] = set = new HashSet<string>();
+                                set.Add(m.Groups[2].Value);
+                            }
+                            else if (line.IndexOf(EnableMark, StringComparison.Ordinal) >= 0)
+                            {
+                                var m = enable.Match(line);
+                                if (m.Success) pending.Add(m.Groups[1].Value);
+                            }
+                            else if (line.IndexOf(DoneMark, StringComparison.Ordinal) >= 0)
+                            {
+                                var m = done.Match(line);
+                                // 同时有多个会话在开启时分不清谁是谁，宁可不配，也不能配错
+                                if (m.Success && pending.Count == 1) bridges.Add(new KeyValuePair<string, string>(pending[0], m.Groups[1].Value));
+                                pending.Clear();
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex) { Log("读取桌面端日志失败：" + Path.GetFileName(f) + " : " + ex.Message); }
             }
         }
 
@@ -965,6 +1100,8 @@ namespace ClaudeSwitch
             Directory.CreateDirectory(LP(dst));
             foreach (var f in Directory.GetFiles(LP(src)))
             {
+                // 待删除记录属于各账号自己，同步过去会让处理完的记录反复出现
+                if (Path.GetFileName(f).StartsWith(OwedDeletePrefix, StringComparison.Ordinal)) continue;
                 var target = LP(Path.Combine(dst, Path.GetFileName(f)));
                 if (!File.Exists(target) || File.GetLastWriteTimeUtc(f) > File.GetLastWriteTimeUtc(target))
                     CopyFileRetry(f, target);
@@ -978,14 +1115,175 @@ namespace ClaudeSwitch
         }
 
         // 在一个号上删掉的会话，不能被另一个号的副本同步回来
-        private static void ApplyDeleteMarkers(string markersDir, string dir)
+        // 桌面端删除时会同时写本地 id 和对话 id 两个标记，这里按本地 id 匹配
+        private void ApplyDeleteMarkers(string markersDir, string dir)
         {
             foreach (var marker in Directory.GetFiles(LP(markersDir), "deleted_*"))
             {
                 var id = Path.GetFileName(marker).Substring("deleted_".Length);
                 var session = LP(Path.Combine(dir, "local_" + id + ".json"));
-                try { if (File.Exists(session)) File.Delete(session); } catch { }
+                try
+                {
+                    if (!File.Exists(session)) continue;
+                    // 记录删掉之前先记下它的云端 id，后面要带给拥有这条云端记录的账号
+                    var d = Js.DeserializeObject(File.ReadAllText(session, new UTF8Encoding(false))) as Dictionary<string, object>;
+                    if (d != null) foreach (var b in BridgeIdsOf(d)) deletedBridgeIds[b] = "local_" + id;
+                    File.Delete(session);
+                }
+                catch { }
             }
+        }
+
+        private readonly Dictionary<string, string> deletedBridgeIds = new Dictionary<string, string>();
+
+        private static List<string> BridgeIdsOf(Dictionary<string, object> d)
+        {
+            var ids = new List<string>();
+            object v;
+            if (d.TryGetValue("bridgeSessionId", out v) && v is string) ids.Add((string)v);
+            if (d.TryGetValue("bridgeSessionIds", out v) && v is object[]) ids.AddRange(((object[])v).OfType<string>());
+            return ids;
+        }
+
+        // ------------------------------------------------------------ cloud cleanup
+
+        // 云端的 Remote Control 记录只有创建它的账号能删。在小号上删除或归档主号建的会话时，
+        // 服务器会回复“没有这个会话”，切回主号后这条记录还在。
+        // 桌面端有一个“欠下的云端删除”队列：会话目录里的 owed-bridge-delete_<sha256(云端 id)> 文件，
+        // 启动后用当前账号逐条处理，并自己核对这条记录没在使用、仍是远程副本。
+        // 这里把另一个号上做过的删除/归档写进每个账号的队列，账号不对的话服务器回复 404，桌面端会当作处理完。
+        private const string OwedDeletePrefix = "owed-bridge-delete_";
+        private const string CloudLedgerFile = "cloud-cleanup-done.txt";
+        private static readonly System.Text.RegularExpressions.Regex RemoteIdPattern =
+            new System.Text.RegularExpressions.Regex(@"^(session|cse)_[0-9A-Za-z]+$");
+
+        public class CloudCleanup
+        {
+            public string RemoteId { get; set; }
+            public string SessionId { get; set; }
+            public string Action { get; set; }   // delete / archive
+            public string Title { get; set; }
+        }
+
+        private static string BridgeKey(string id)
+        {
+            var i = id.IndexOf('_');
+            return i >= 0 ? id.Substring(i + 1) : id;
+        }
+
+        private static string OwedFileName(string remoteId)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(remoteId));
+                return OwedDeletePrefix + string.Concat(hash.Select(b => b.ToString("x2")));
+            }
+        }
+
+        private HashSet<string> LoadCloudLedger()
+        {
+            try
+            {
+                var p = Path.Combine(StoreRoot, CloudLedgerFile);
+                if (File.Exists(p)) return new HashSet<string>(File.ReadAllLines(p).Where(l => l.Length > 0));
+            }
+            catch { }
+            return new HashSet<string>();
+        }
+
+        // 算出需要带到其他账号的删除/归档，不写任何东西
+        public List<CloudCleanup> PlanCloudCleanup(string sessionsDir)
+        {
+            var bridges = new List<KeyValuePair<string, string>>();
+            var clis = new Dictionary<string, HashSet<string>>();
+            ReadBridgeLogs(bridges, clis);
+
+            var live = new HashSet<string>();
+            var archived = new List<KeyValuePair<string, List<string>>>();
+            foreach (var f in Directory.GetFiles(LP(sessionsDir), "local_*.json"))
+            {
+                try
+                {
+                    var d = Js.DeserializeObject(File.ReadAllText(f, new UTF8Encoding(false))) as Dictionary<string, object>;
+                    if (d == null) continue;
+                    object v;
+                    var ids = BridgeIdsOf(d);
+                    if (d.TryGetValue("isArchived", out v) && v is bool && (bool)v)
+                        archived.Add(new KeyValuePair<string, List<string>>(Path.GetFileNameWithoutExtension(f), ids));
+                    else
+                        foreach (var i in ids) live.Add(BridgeKey(i));
+                }
+                catch { }
+            }
+
+            var markers = new HashSet<string>(Directory.GetFiles(LP(sessionsDir), "deleted_*").Select(m => "local_" + Path.GetFileName(m).Substring("deleted_".Length)));
+            var ledger = LoadCloudLedger();
+            var plan = new Dictionary<string, CloudCleanup>();
+            Action<string, string, string> add = (remoteId, sessionId, action) =>
+            {
+                if (!RemoteIdPattern.IsMatch(remoteId)) return;
+                var key = BridgeKey(remoteId);
+                if (live.Contains(key) || ledger.Contains(action + ":" + key)) return;
+                CloudCleanup existing;
+                if (plan.TryGetValue(key, out existing))
+                {
+                    if (existing.Action == "delete" || action != "delete") return; // 删除优先于归档
+                }
+                plan[key] = new CloudCleanup { RemoteId = remoteId, SessionId = sessionId, Action = action };
+            };
+
+            foreach (var kv in deletedBridgeIds) add(kv.Key, kv.Value, "delete");
+            foreach (var b in bridges) if (markers.Contains(b.Key)) add(b.Value, b.Key, "delete");
+            // 归档的记录文件还在，队列要求 sessionId 没有对应的记录，所以用一个独立的名字
+            foreach (var a in archived) foreach (var i in a.Value) add(i, "relay-" + a.Key.Substring("local_".Length), "archive");
+            return plan.Values.ToList();
+        }
+
+        // 必须在 Claude 关闭时调用
+        public int QueueCloudCleanup(Store store, string sessionsDir)
+        {
+            var plan = PlanCloudCleanup(sessionsDir);
+            deletedBridgeIds.Clear();
+            if (plan.Count == 0) return 0;
+
+            var dirs = new List<string>();
+            foreach (var acc in store.Accounts)
+            {
+                if (string.IsNullOrEmpty(acc.AccountUuid)) continue;
+                var org = GetInsight(acc, false).DesktopOrg;
+                if (string.IsNullOrEmpty(org)) org = acc.OrgUuid;
+                if (string.IsNullOrEmpty(org)) continue;
+                var dir = Path.Combine(DataDir, "claude-code-sessions", acc.AccountUuid, org);
+                if (Directory.Exists(LP(dir)) && !IsReparsePoint(dir)) dirs.Add(dir);
+            }
+            if (dirs.Count == 0) return 0;
+
+            var done = new List<string>();
+            foreach (var item in plan)
+            {
+                var note = new Dictionary<string, object>
+                {
+                    { "version", 3 },
+                    { "sessionId", item.SessionId },
+                    { "transcriptIds", new object[0] },
+                    { "nonce", Guid.NewGuid().ToString("N").Substring(0, 16) },
+                    { "remoteId", item.RemoteId },
+                    { "writtenAt", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() },
+                    { "state", "owed" },
+                    { "action", item.Action }
+                };
+                var ok = false;
+                foreach (var dir in dirs)
+                {
+                    var path = Path.Combine(dir, OwedFileName(item.RemoteId));
+                    try { if (!File.Exists(LP(path))) WriteAllTextAtomic(path, Js.Serialize(note)); ok = true; }
+                    catch (Exception ex) { Log("写入云端删除记录失败：" + ex.Message); }
+                }
+                if (ok) done.Add(item.Action + ":" + BridgeKey(item.RemoteId));
+            }
+            if (done.Count > 0)
+                File.AppendAllLines(Path.Combine(StoreRoot, CloudLedgerFile), done);
+            return done.Count;
         }
 
         // 复制目录树（支持超过 260 字符的路径）。
@@ -1208,9 +1506,14 @@ namespace ClaudeSwitch
         {
             try
             {
-                if (string.IsNullOrEmpty(DataDir)) return 0;
-                var dir = SharedSessionDir("claude-code-sessions");
-                return Directory.Exists(dir) ? Directory.GetFiles(dir, "local_*.json").Length : 0;
+                // 数当前账号实际看到的（未归档的）会话；中转目录只在切号时更新，数字会偏旧
+                var uuid = GetDesktopUuid();
+                if (string.IsNullOrEmpty(DataDir) || string.IsNullOrEmpty(uuid)) return 0;
+                var root = Path.Combine(DataDir, "claude-code-sessions", uuid);
+                if (!Directory.Exists(LP(root))) return 0;
+                return Directory.GetDirectories(LP(root)).Select(d => Directory.GetFiles(d, "local_*.json")
+                    .Count(f => { try { return File.ReadAllText(f, new UTF8Encoding(false)).IndexOf("\"isArchived\":true", StringComparison.Ordinal) < 0; } catch { return false; } }))
+                    .DefaultIfEmpty(0).Max();
             }
             catch { return 0; }
         }

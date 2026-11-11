@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -116,6 +116,16 @@ namespace ClaudeSwitch
             var portable = PortableDir;
             if (portable != null && Directory.Exists(portable)) return true;
 
+            // 用户直接把安装目录里的 exe 挪到了别处：接管新位置，账号数据不变
+            if (AdoptMovedInstall()) return true;
+
+            // 已经装了同版本或更新的版本：直接打开，不再弹安装窗口
+            if (IsInstalled && !IsNewerVersion(Version, InstalledVersion))
+            {
+                LaunchInstalled();
+                return false;
+            }
+
             var w = new InstallWindow(InstallWindow.Mode.Install);
             w.ShowDialog();
             if (w.Outcome == InstallWindow.Result.Portable)
@@ -128,6 +138,62 @@ namespace ClaudeSwitch
         }
 
         public static bool IsInstalled { get { return File.Exists(InstalledExe); } }
+
+        // a 是否比 b 新；b 读不出来时当作 a 更新，这样还能走更新流程
+        public static bool IsNewerVersion(string a, string b)
+        {
+            System.Version x, y;
+            if (!System.Version.TryParse(b ?? "", out y)) return true;
+            if (!System.Version.TryParse(a ?? "", out x)) return false;
+            return Normalize(x) > Normalize(y);
+        }
+
+        private static System.Version Normalize(System.Version v)
+        {
+            return new System.Version(v.Major, v.Minor, Math.Max(v.Build, 0), Math.Max(v.Revision, 0));
+        }
+
+        private static string RegisteredDir()
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(UninstallKey))
+                    return k == null ? null : k.GetValue("InstallLocation") as string;
+            }
+            catch { return null; }
+        }
+
+        // 登记过安装位置，那里的 exe 不见了，而当前运行的 exe 不在那里
+        public static bool LooksMoved(string registeredDir, bool registeredExeExists, string currentDir)
+        {
+            return !string.IsNullOrEmpty(registeredDir) && !registeredExeExists && !SamePath(registeredDir, currentDir);
+        }
+
+        private static bool AdoptMovedInstall()
+        {
+            var registered = RegisteredDir();
+            var current = Engine.ExeDir;
+            if (string.IsNullOrEmpty(current) ||
+                !LooksMoved(registered, !string.IsNullOrEmpty(registered) && File.Exists(Path.Combine(registered, ExeName)), current) ||
+                !string.Equals(Path.GetFileName(CurrentExe), ExeName, StringComparison.OrdinalIgnoreCase))
+                return false;
+            try
+            {
+                var hadDesktop = File.Exists(DesktopShortcut);
+                installTarget = current;
+                CreateShortcut(StartMenuShortcut);
+                if (hadDesktop) CreateShortcut(DesktopShortcut);
+                RegisterUninstall();
+                Engine.Trace("adopted moved install: " + current);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                installTarget = null;
+                Engine.Trace("adopt moved install failed: " + ex.Message);
+                return false;
+            }
+        }
 
         public static string Version
         {
@@ -272,15 +338,45 @@ namespace ClaudeSwitch
             if (deleteData && Directory.Exists(Engine.InstalledDataRoot)) Engine.TryDeleteDir(Engine.InstalledDataRoot);
         }
 
-        // 程序自己正在运行，退出后再删。只删接力自己的 exe，文件夹空了才删文件夹（不整个递归删除，免得误删用户放在那里的东西）
+        // 程序自己正在运行，删不掉自己。和常见的卸载程序一样：复制一份到临时目录，由它等本进程退出后收尾
         private static void ScheduleRemoveInstallDir(string dir)
         {
             if (!Directory.Exists(dir)) return;
-            var exe = Path.Combine(dir, ExeName);
-            var psi = new ProcessStartInfo("cmd.exe",
-                "/c ping 127.0.0.1 -n 3 >nul & del /f /q \"" + exe + "\" \"" + exe + ".old-*\" & rmdir \"" + dir + "\"")
-            { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden };
-            try { Process.Start(psi); } catch { }
+            try
+            {
+                var helper = Path.Combine(Path.GetTempPath(), "ClaudeRelay-uninstall-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".exe");
+                File.Copy(CurrentExe, helper, true);
+                Process.Start(new ProcessStartInfo(helper, "--finish-uninstall " + Process.GetCurrentProcess().Id + " \"" + dir.TrimEnd('\\') + "\"") { UseShellExecute = false });
+            }
+            catch (Exception ex) { Engine.Trace("finish uninstall failed to start: " + ex.Message); }
+        }
+
+        // 只删接力自己的 exe，文件夹空了才删文件夹（不整个递归删除，免得误删用户放在那里的东西）
+        public static void FinishUninstall(string pid, string dir)
+        {
+            try { int id; if (int.TryParse(pid, out id)) Process.GetProcessById(id).WaitForExit(15000); }
+            catch { }
+            for (int i = 0; i < 10; i++)
+            {
+                try
+                {
+                    if (Directory.Exists(dir))
+                        foreach (var f in Directory.GetFiles(dir, ExeName + "*"))
+                        {
+                            var n = Path.GetFileName(f);
+                            if (string.Equals(n, ExeName, StringComparison.OrdinalIgnoreCase) || n.StartsWith(ExeName + ".old-", StringComparison.OrdinalIgnoreCase))
+                                File.Delete(f);
+                        }
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    if (i == 9) { try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "claude-relay-uninstall.log"), DateTime.Now.ToString("s") + " " + ex + Environment.NewLine); } catch { } }
+                    System.Threading.Thread.Sleep(500);
+                }
+            }
+            try { if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir, false); }
+            catch { }
         }
 
         private static void RegisterUninstall()

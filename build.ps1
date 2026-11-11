@@ -37,7 +37,7 @@ if ($missing) { throw ("缺少引用程序集：" + ($missing -join ', ')) }
 $sources = Get-ChildItem (Join-Path $src '*.cs') | ForEach-Object { $_.FullName }
 $out = Join-Path $dist $OutName
 # 图标同时作为内嵌资源，程序里按需取 16 像素（托盘）等小尺寸，避免从 32 像素缩小发糊
-$cscArgs = @('/nologo', '/target:winexe', '/platform:anycpu', "/out:`"$out`"", "/win32icon:`"$ico`"", "/resource:`"$ico`",ClaudeRelay.app.ico")
+$cscArgs = @('/nologo', '/target:winexe', '/platform:anycpu', "/out:`"$out`"", "/win32icon:`"$ico`"", "/resource:`"$ico`",ClaudeRelay.app.ico", "/win32manifest:`"$(Join-Path $root 'app.manifest')`"")
 $cscArgs += ($refs | ForEach-Object { "/r:`"$_`"" })
 $cscArgs += $sources
 
